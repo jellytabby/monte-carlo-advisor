@@ -3,7 +3,7 @@ import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional
 
 import utils
 from advisors import log_reader
@@ -55,7 +55,6 @@ class CompilerCommunicator(ABC):
         on_action: Optional[Callable[[bool], Any]] = None,
         timeout: Optional[float] = None,
     ):
-
         self.clean_up_pipes()
         with tempfile.TemporaryFile("b+x") as error_buffer:
             compiler_proc = None

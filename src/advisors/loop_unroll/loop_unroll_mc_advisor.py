@@ -31,7 +31,7 @@ class LoopUnrollMonteCarloAdvisor(MonteCarloAdvisor[int]):
         )
         self.filename = self.runner.channel_base
 
-        self.MAX_UNROLL_FACTOR = 10
+        self.MAX_UNROLL_FACTOR = 32
 
         if model_path is not None:
             self.interpreter = Interpreter(model_path=model_path)

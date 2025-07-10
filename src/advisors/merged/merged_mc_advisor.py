@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class MergedMonteCarloAdvisor(MonteCarloAdvisor[bool | int]):
-    def __init__(self, input_name, unroll_model_path, C=sqrt(2)) -> None:
-        super().__init__(input_name, C)
-        self.inline_advisor = InlineMonteCarloAdvisor(input_name)
+    def __init__(self, input_name, path, timeout, unroll_model_path, C=sqrt(2)) -> None:
+        super().__init__(input_name, path, timeout, C)
+        self.inline_advisor = InlineMonteCarloAdvisor(input_name, path, timeout)
         self.loop_unroll_advisor = LoopUnrollMonteCarloAdvisor(
-            input_name, unroll_model_path
+            input_name, path, timeout, unroll_model_path
         )
+
         self.runner = MergedCompilerCommunicator(input_name, True)
 
     def opt_args(self) -> list[str]:
@@ -37,7 +38,7 @@ class MergedMonteCarloAdvisor(MonteCarloAdvisor[bool | int]):
             f"--mlgo-loop-unroll-interactive-channel-base={self.loop_unroll_advisor.filename}",
             "--mlgo-loop-unroll-advisor-mode=development",
             "-debug-only=loop-unroll-development-advisor,loop-unroll,inline,inline-ml",
-        ]
+        ] + ["-o", self.path + "mod-post-mc.bc", self.path + "mod-pre-mc.bc"]
 
     def get_next_state(
         self,
@@ -147,11 +148,13 @@ class MergedMonteCarloAdvisor(MonteCarloAdvisor[bool | int]):
                 raise UnknownAdvisorError()
 
     @override
-    def get_score(self, path: str, timeout: Optional[float], scoring_function):
+    def get_score(self, scoring_function):
+
+        logger.error(f"selfpath: {self.path}")
         self.runner.compile_once(
-            self.opt_args() + ["-o", path + "mod-post-mc.bc", path + "mod-pre-mc.bc"],
+            self.opt_args(),
             self.advice,
             on_action=self.check_unroll_success,
-            timeout=timeout,
+            timeout=self.timeout,
         )
         return scoring_function()

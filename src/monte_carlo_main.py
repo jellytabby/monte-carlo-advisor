@@ -10,10 +10,10 @@ import utils
 from advisors.inline import inline_mc_advisor
 from advisors.loop_unroll import loop_unroll_mc_advisor
 from advisors.merged.merged_mc_advisor import MergedMonteCarloAdvisor
-from datastructures import AdaptiveBenchmarkingResult
 from advisors.reg_alloc.reg_alloc_eviction_advisor import (
     RegAllocEvictionMonteCarloAdvisor,
 )
+from datastructures import AdaptiveBenchmarkingResult
 
 logger = logging.getLogger(__name__)
 datefmt = "%Y-%m-%d %H:%M:%S"
@@ -136,17 +136,8 @@ def main(args):
     logger.info(f"Python script running on logical cores: {logical_cores}")
     os.sched_setaffinity(0, set(logical_cores))
 
-    # next_free_core = physical_to_logical[
-    #     utils.get_next_free_physical_core(MANAGER_PHYSICAL_CORES)
-    # ][0]
-
     if len([c for c in args.core if c < MANAGER_PHYSICAL_CORES]) > 0:
         raise RuntimeError(f"Core {args.core} is reserved for the manager process")
-    # try:
-    #     next_free_core = physical_to_logical[args.core][0]
-    # except:
-    #     raise RuntimeError(f"Core {args.core} is out of range")
-
     benchmark_cores = sum([physical_to_logical[i] for i in args.core], [])
 
     logger.info(f"Benchmark core is {benchmark_cores}")
@@ -157,27 +148,38 @@ def main(args):
     path = input_dir + "/"
     os.environ["INPUT"] = input_file
 
-    match (args.inline_advisor, args.loop_unroll_advisor):
-        case (True, True):
-            advisor = MergedMonteCarloAdvisor(
-                input_name,
-                unroll_model_path=args.loop_unroll_advisor_model,
-            )
-        case (True, False):
-            advisor = inline_mc_advisor.InlineMonteCarloAdvisor(input_name)
-        case (False, True):
-            advisor = loop_unroll_mc_advisor.LoopUnrollMonteCarloAdvisor(
-                input_name, model_path=args.loop_unroll_advisor_model
-            )
-        case _:
-            raise Exception(
-                "You need to specify at least one advisor. See '--help' for more information."
-            )
+    make_clean()
+    get_input_module()
+    if not args.reg_alloc_advisor:
+        match (args.inline_advisor, args.loop_unroll_advisor):
+            case (True, True):
+                advisor = MergedMonteCarloAdvisor(
+                    input_name,
+                    path,
+                    args.timeout,
+                    unroll_model_path=args.loop_unroll_advisor_model,
+                )
+            case (True, False):
+                advisor = inline_mc_advisor.InlineMonteCarloAdvisor(
+                    input_name, path, args.timeout
+                )
+            case (False, True):
+                advisor = loop_unroll_mc_advisor.LoopUnrollMonteCarloAdvisor(
+                    input_name,
+                    path,
+                    args.timeout,
+                    model_path=args.loop_unroll_advisor_model,
+                )
+            case _:
+                raise Exception(
+                    "You need to specify at least one advisor. See '--help' for more information."
+                )
+    else:
+        get_optimized_module()
+        advisor = RegAllocEvictionMonteCarloAdvisor(input_name, path, args.timeout)
 
     start = datetime.now().strftime("%Y%m%d_%H%M%S")
     plotter = plot_main.Plotter(input_name, args, advisor, start)
-    make_clean()
-    get_input_module()
 
     logger.info("Starting baseline benchmarking")
     baseline = get_baseline_runtime(
@@ -190,84 +192,20 @@ def main(args):
     )
     logger.info("Completed baseline benchmarking")
     logger.info("Starting Monte Carlo Tree runs")
-    if args.min_run:
-        assert baseline is list[float]
-        scoring_function = lambda: get_min_score(
-            baseline,
-            args.warmup_runs,
-            args.initial_samples,
-            args.timeout,
-            set(benchmark_cores),
-            plotter,
-        )
-    else:
-        assert baseline is AdaptiveBenchmarkingResult
-        scoring_function = lambda: get_median_score(
-            baseline,
-            args.warmup_runs,
-            args.initial_samples,
-            args.max_samples,
-            args.timeout,
-            set(benchmark_cores),
-            plotter,
-        )
-
-    advisor.run_monte_carlo(
-        args.number_of_runs, input_dir + "/", args.timeout, scoring_function
+    scoring_function = lambda: get_speedup(
+        baseline,
+        args.warmup_runs,
+        args.initial_samples,
+        args.max_samples,
+        args.timeout,
+        set(benchmark_cores),
+        args.min_run,
+        plotter,
     )
+
+    advisor.run_monte_carlo(args.number_of_runs, scoring_function)
     plotter.log_results()
     plotter.plot_speedup()
-    del os.environ["INPUT"]  # NOTE: makes no difference apparently?
-
-    if not args.reg_alloc_advisor:
-        match (args.inline_advisor, args.loop_unroll_advisor):
-            case (True, True):
-                advisor = MergedMonteCarloAdvisor(
-                    input_name, unroll_model_path=args.loop_unroll_advisor_model
-                )
-            case (True, False):
-                advisor = inline_mc_advisor.InlineMonteCarloAdvisor(input_name)
-            case (False, True):
-                advisor = loop_unroll_mc_advisor.LoopUnrollMonteCarloAdvisor(
-                    input_name,
-                    path,
-                    args.timeout,
-                    model_path=args.loop_unroll_advisor_model,
-                )
-            case _:
-                raise Exception(
-                    "You need to specify at least one advisor. See '--help' for more information."
-                )
-
-        advisor.run_monte_carlo(
-            args.number_of_runs,
-            lambda: get_score(
-                baseline,
-                args.warmup_runs,
-                args.initial_samples,
-                args.max_samples,
-                args.timeout,
-                next_free_core,
-            ),
-        )
-    else:
-        get_input_module()
-        get_optimized_module()
-        advisor = RegAllocEvictionMonteCarloAdvisor(input_name, path, args.timeout)
-        advisor.run_monte_carlo(
-            args.number_of_runs,
-            lambda: get_reg_alloc_score(
-                baseline,
-                args.warmup_runs,
-                args.initial_samples,
-                args.max_samples,
-                args.timeout,
-                next_free_core,
-            ),
-        )
-
-    plot_main.log_results(advisor, args, start, input_name, args.plot_directory)
-    plot_main.plot_speedup(advisor, input_name, args.plot_directory)
     # del os.environ["INPUT"]  # NOTE: makes no difference apparently?
     logger.info("Succesfully completed Monte Carlo Advising")
 
@@ -287,19 +225,7 @@ def get_optimized_module():
     utils.get_cmd_output(cmd)
 
 
-def get_baseline_runtime(
-    warmup_runs: int, initial_samples: int, max_samples: int, core: int
-):
-    cmd = ["make", "run_baseline"]
-    return utils.adaptive_benchmark(
-        runtime_generator(cmd, core),
-        warmup_runs=warmup_runs,
-        initial_samples=initial_samples,
-        max_samples=max_samples,
-    )
-
-
-def runtime_generator(cmd: list[str], core: int):
+def runtime_generator(cmd: list[str], cores: set[int]):
     logger.debug(cmd)
     while True:
         outs = utils.get_cmd_output(
@@ -334,65 +260,38 @@ def get_baseline_runtime(
     return baseline_runtimes
 
 
-def get_median_score(
-    baseline: utils.AdaptiveBenchmarkingResult,
+def get_speedup(
+    baseline: list[int] | AdaptiveBenchmarkingResult,
     warmup_runs: int,
     initial_samples: int,
     max_samples: int,
     timeout: float,
     cores: set[int],
-    plotter: plot_main.Plotter,
-):
-    cmd = ["make", "module_obj"]
-    utils.get_cmd_output(cmd, timeout=timeout)
-    cmd = ["make", "run"]
-    runtimes = utils.adaptive_benchmark(
-        runtime_generator(cmd, cores),
-        warmup_runs=warmup_runs,
-        initial_samples=initial_samples,
-        max_samples=max_samples,
-    )
-    plotter.runtime_histogram(list(runtimes.runtimes))
-    return baseline.median / runtimes.median
-    # return utils.get_speedup_factor(baseline, runtimes)
-
-
-def get_min_score(
-    baseline: list[int],
-    warmup_runs: int,
-    initial_samples: int,
-    timeout: float,
-    cores: set[int],
+    use_min_run: bool,
     plotter: plot_main.Plotter,
 ) -> float:
     cmd = ["make", "module_obj"]
     utils.get_cmd_output(cmd, timeout=timeout)
     cmd = ["make", "run"]
 
-    runtimes = utils.get_fixed_run_benchmark(
-        runtime_generator(cmd, cores),
-        warmup_runs=warmup_runs,
-        initial_samples=initial_samples,
-    )
-    assert len(baseline) == len(runtimes)
-    plotter.runtime_histogram(runtimes)
-    return min(baseline) / min(runtimes)
-def get_reg_alloc_score(
-    baseline: utils.AdaptiveBenchmarkingResult,
-    warmup_runs: int,
-    initial_samples: int,
-    max_samples: int,
-    timeout: float | None,
-    core: int,
-):
-    cmd = ["make", "run"]
-    runtimes = utils.adaptive_benchmark(
-        runtime_generator(cmd, core),
-        warmup_runs=warmup_runs,
-        initial_samples=initial_samples,
-        max_samples=max_samples,
-    )
-    return baseline.median / runtimes.median
+    if use_min_run:
+        runtimes = utils.get_fixed_run_benchmark(
+            runtime_generator(cmd, cores),
+            warmup_runs=warmup_runs,
+            initial_samples=initial_samples,
+        )
+        assert len(baseline) == len(runtimes)
+        plotter.runtime_histogram(runtimes)
+        return min(baseline) / min(runtimes)
+    else:
+        runtimes = utils.adaptive_benchmark(
+            runtime_generator(cmd, cores),
+            warmup_runs=warmup_runs,
+            initial_samples=initial_samples,
+            max_samples=max_samples,
+        )
+        plotter.runtime_histogram(list(runtimes.runtimes))
+        return baseline.median / runtimes.median
 
 
 if __name__ == "__main__":

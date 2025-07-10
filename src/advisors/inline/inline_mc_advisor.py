@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 @final
 class InlineMonteCarloAdvisor(MonteCarloAdvisor[bool]):
-    def __init__(self, input_name, C: float = sqrt(2)) -> None:
-        super().__init__(input_name, C)
+    def __init__(self, input_name, path, timeout, C: float = sqrt(2)) -> None:
+        super().__init__(input_name, path, timeout, C)
         self.runner = inline_runner.InlineCompilerCommunicator(input_name, True)
         self.filename = self.runner.channel_base
 
@@ -32,7 +32,7 @@ class InlineMonteCarloAdvisor(MonteCarloAdvisor[bool]):
             f"-inliner-interactive-channel-base={self.filename}",
         ] + ["-o", self.path + "mod-post-mc.bc", self.path + "mod-pre-mc.bc"]
 
-    def get_rollout_decision(self, tv=None) -> bool:
+    def get_rollout_decision(self, tv=None, heuristic=None) -> bool:
         choice = random.random()
         return True if choice >= 0.5 else False
 
@@ -54,7 +54,10 @@ class InlineMonteCarloAdvisor(MonteCarloAdvisor[bool]):
                 return
 
     def get_next_state(
-        self, state: State[bool], tv: Optional[list[TensorValue]]
+        self,
+        state: State[bool],
+        tv: Optional[list[TensorValue]],
+        heuristic=None,
     ) -> State[bool]:
         if state.is_leaf():
             choice = self.get_rollout_decision()
