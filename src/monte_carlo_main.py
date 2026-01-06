@@ -193,7 +193,7 @@ def main(args):
             plotter,
         )
     else:
-        assert baseline is AdaptiveBenchmarkingResult
+        assert type(baseline) is AdaptiveBenchmarkingResult
         scoring_function = lambda: get_median_score(
             baseline,
             args.warmup_runs,
